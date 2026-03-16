@@ -609,14 +609,15 @@ async function assignAndPush(round){
       decoys[p.id] = others[Math.floor(Math.random()*others.length)];
     }
   });
+  // Null renderedCardId BEFORE the push so that when our own listener fires
+  // from this write, it sees null and correctly runs renderGame() with the animation.
+  // All subsequent writes (checkbox, ready button) will find renderedCardId === myCardId
+  // and take the updateGame() path — no animation.
+  renderedCardId = null;
   await update(ref(db,`rooms/${roomId}`), {
     phase:'game', round, assignments, decoys, completed, votes:{}, ready,
     'settings/enabledCards': enabled,
   });
-  // Null renderedCardId so everyone (including host) gets the deal animation for the new round.
-  // The listener guard (myCard() && myCard() !== renderedCardId) prevents
-  // spurious animation triggers from unrelated Firebase writes like checkbox clicks.
-  renderedCardId = null;
 }
 
 // ── CARD DEAL ANIMATION ───────────────────────────────────────────────────────
@@ -866,7 +867,9 @@ function updateGame(){
   if(c) showObjectiveSection(c);
 
   // Update ready section (non-host)
+  const readySection2 = $('ready-section');
   if(!isHost){
+    if(readySection2) readySection2.style.display = '';
     const iAmReady = readyMap[myId] || false;
     const btnWrap = $('ready-btn-wrap');
     if(btnWrap) btnWrap.innerHTML = iAmReady
@@ -883,8 +886,10 @@ function updateGame(){
         rList.appendChild(d);
       });
     }
-    const rnum = $('ready-count-num');   if(rnum)   rnum.textContent   = readyCount;
-    const rtot = $('ready-count-total'); if(rtot)   rtot.textContent   = nonHostPlayers.length;
+    const rnum = $('ready-count-num');   if(rnum) rnum.textContent   = readyCount;
+    const rtot = $('ready-count-total'); if(rtot) rtot.textContent   = nonHostPlayers.length;
+  } else {
+    if(readySection2) readySection2.style.display = 'none';
   }
 
   // Update all players list

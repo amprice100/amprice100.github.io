@@ -390,7 +390,6 @@ let enabledCards = new Set(CARDS.map(c => c.id));
 let myVotes      = {};
 let renderedCardId  = null;
 let currentScreenId = null;
-let cardRevealed    = false; // tracks whether player has clicked to reveal their card
 
 const $       = id => document.getElementById(id);
 const cardDef = id => CARDS.find(c => c.id === id);
@@ -609,12 +608,11 @@ async function assignAndPush(round){
     phase:'game', round, assignments, decoys, completed, votes:{}, ready,
     'settings/enabledCards': enabled,
   });
-  // Reset our local card tracker when new cards are assigned
-  renderedCardId = null;
-  cardRevealed   = false;
-  // Do NOT reset currentScreenId here — that causes the animation to re-trigger
-  // on every Firebase update while already on the game screen.
-  // currentScreenId resets naturally when the phase changes to a different screen.
+  // Only reset renderedCardId if our own card actually changed
+  // (avoids re-triggering the animation for the host who called this function)
+  if(assignments[myId] !== renderedCardId){
+    renderedCardId = null;
+  }
 }
 
 // ── CARD DEAL ANIMATION ───────────────────────────────────────────────────────
@@ -696,59 +694,40 @@ function renderGame(){
     cardRevealed   = false;
   } else if(myCardId !== renderedCardId) {
     renderedCardId = myCardId;
-    cardRevealed   = false; // new card — must click to reveal again
 
-    // Show deal animation, then show the click-to-reveal button
     wrap.innerHTML = `<div class="role-card"><div class="waiting-card"><div class="spin">🎴</div><h2>DEALING...</h2></div></div>`;
 
     runDealAnimation(myCardId, () => {
-      // After animation, show a face-down "tap to reveal" card
+      // Show the card directly — no click-to-reveal
+      let foolHtml = '';
+      if(c.isFool && gs.settings?.foolHint && gs.decoys?.[myId]){
+        const dc = cardDef(gs.decoys[myId]);
+        foolHtml = `<div class="fool-hint-box">🎭 <strong>Act like: ${dc?.emoji} ${dc?.name}</strong><br>"${dc?.obj}"<br>Make everyone think you have THIS card.</div>`;
+      }
       wrap.innerHTML = `
-        <div class="role-card" style="cursor:pointer;border-color:var(--card-border);" onclick="revealCard()" id="hidden-card">
-          <div style="padding:20px 0;position:relative;">
-            <div style="font-size:72px;margin-bottom:16px;filter:blur(6px) opacity(0.4);">🃏</div>
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;color:var(--gold);margin-bottom:8px;">YOUR ROLE</div>
-            <div style="font-family:'Barlow Condensed',sans-serif;font-size:15px;color:var(--muted);line-height:1.4;">Tap to reveal<br><em>make sure nobody's watching</em></div>
-            <div style="margin-top:18px;">
-              <span class="btn btn-gold" style="font-size:16px;padding:10px 24px;">👁 REVEAL MY CARD</span>
-            </div>
-          </div>
+        <div class="role-card animate-in" style="border-color:${c.color};box-shadow:0 0 50px ${c.color}28;">
+          <div class="rc-name" style="color:${c.color}">${c.name}</div>
+          <span class="rc-emoji">${c.emoji}</span>
+          <div class="rc-obj-label">OBJECTIVE</div>
+          <div class="rc-obj">${c.obj}</div>
+          <div class="rc-desc">${c.desc}</div>
+          ${foolHtml}
         </div>`;
+      // Show objective section now that card is visible
+      showObjectiveSection(c);
     });
-  }
-  // If card is same and already revealed, do nothing (no flip, no scroll)
 
-  // ── OBJECTIVE TOGGLE — only show after card is revealed, hidden entirely for Fool ──
-  const otWrap   = $('obj-toggle-wrap');
-  const objNote  = $('obj-note');
-  const objLabel = $('obj-section-label');
-
-  if(!c || !cardRevealed){
-    // Card not yet revealed — hide everything below card
+    // Hide objective section while animation is running
+    const objNote  = $('obj-note');
+    const objLabel = $('obj-section-label');
+    const otWrap   = $('obj-toggle-wrap');
     if(objNote)  objNote.style.display  = 'none';
     if(objLabel) objLabel.style.display = 'none';
     otWrap.innerHTML = '';
-  } else if(c.isFool){
-    // Fool — show section but NO checkbox, just a note
-    if(objLabel) objLabel.style.display = '';
-    if(objNote)  objNote.style.display  = 'none';
-    otWrap.innerHTML = `<div class="obj-note" style="color:rgba(200,180,255,.8);border-left-color:rgba(155,89,245,.5);display:block;">🃏 <strong style="color:#c8a0ff">You're the Fool.</strong> No need to check anything — you'll find out if you succeeded once everyone's votes are revealed.</div>`;
-  } else {
-    // Normal card — show objective checkbox
-    if(objNote)  objNote.style.display  = '';
-    if(objLabel) objLabel.style.display = '';
-    const done = gs.completed?.[myId] || false;
-    otWrap.innerHTML = '';
-    const ot = document.createElement('div');
-    ot.className = 'obj-toggle' + (done?' done':'');
-    ot.onclick = toggleDone;
-    ot.innerHTML = `
-      <div class="ot-check">${done?'✓':''}</div>
-      <div>
-        <div class="ot-text">${c.obj}</div>
-        <div class="ot-sub">${done ? '✅ Marked complete — +4 pts before steals' : 'Tap after your match if you completed this'}</div>
-      </div>`;
-    otWrap.appendChild(ot);
+  }
+  // If card same as renderedCardId — animation already ran, card is visible, just update objective section
+  if(c && myCardId === renderedCardId){
+    showObjectiveSection(c);
   }
 
   // ── READY UP (non-host players) ──
@@ -828,31 +807,12 @@ function renderGame(){
   }
 }
 
-window.revealCard = function(){
-  cardRevealed = true;
-  const myCardId = myCard();
-  const c = cardDef(myCardId);
-  if(!c) return;
-
-  const wrap = $('role-card-wrap');
-  let foolHtml = '';
-  if(c.isFool && gs.settings?.foolHint && gs.decoys?.[myId]){
-    const dc = cardDef(gs.decoys[myId]);
-    foolHtml = `<div class="fool-hint-box">🎭 <strong>Act like: ${dc?.emoji} ${dc?.name}</strong><br>"${dc?.obj}"<br>Make everyone think you have THIS card.</div>`;
-  }
-  wrap.innerHTML = `
-    <div class="role-card animate-in" style="border-color:${c.color};box-shadow:0 0 50px ${c.color}28;">
-      <div class="rc-name" style="color:${c.color}">${c.name}</div>
-      <span class="rc-emoji">${c.emoji}</span>
-      <div class="rc-obj-label">OBJECTIVE</div>
-      <div class="rc-obj">${c.obj}</div>
-      <div class="rc-desc">${c.desc}</div>
-      ${foolHtml}
-    </div>`;
-
+// ── OBJECTIVE SECTION HELPER ──────────────────────────────────────────────────
+function showObjectiveSection(c){
   const objNote  = $('obj-note');
   const objLabel = $('obj-section-label');
   const otWrap   = $('obj-toggle-wrap');
+  if(!c) return;
   if(c.isFool){
     if(objLabel) objLabel.style.display = '';
     if(objNote)  objNote.style.display  = 'none';
@@ -873,7 +833,7 @@ window.revealCard = function(){
       </div>`;
     otWrap.appendChild(ot);
   }
-};
+}
 
 async function toggleDone(){
   const cur = gs.completed?.[myId] || false;
